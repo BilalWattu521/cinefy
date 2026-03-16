@@ -101,4 +101,4 @@ Contributions are welcome! If you have suggestions for improvements or find any 
 
 ## Made with ❤️ by Muhammad Bilal Ahmed
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+
