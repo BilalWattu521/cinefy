@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:animate_do/animate_do.dart';
@@ -32,6 +31,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   void initState() {
     super.initState();
     _fetchSeasonCount();
+
+    // Start watching videos for this movie
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final auth = Provider.of<AuthService>(context, listen: false);
+      final userData = Provider.of<UserDataProvider>(context, listen: false);
+      if (auth.currentUser != null) {
+        userData.watchMovieVideos(auth.currentUser!.uid, widget.movie.uniqueId);
+      }
+    });
   }
 
   Future<void> _fetchSeasonCount() async {
@@ -86,37 +94,27 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 userDataProvider.watchedIds.contains(widget.movie.id);
 
             return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Fixed Header (Hero Image + Title)
-                Flexible(
-                  flex: 0,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(context).size.height * 0.45,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        FadeIn(
-                          duration: const Duration(milliseconds: 600),
-                          child: Flexible(child: _buildHeroSection()),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: FadeInLeft(
-                              duration: const Duration(milliseconds: 600),
-                              delay: const Duration(milliseconds: 200),
-                              child: Text(
-                                widget.movie.title,
-                                style: Theme.of(context).textTheme.headlineSmall
-                                    ?.copyWith(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                // Fixed Header: Hero Image
+                FadeIn(
+                  duration: const Duration(milliseconds: 600),
+                  child: _buildHeroSection(),
+                ),
+
+                // Fixed Header: Movie Title
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FadeInLeft(
+                      duration: const Duration(milliseconds: 600),
+                      delay: const Duration(milliseconds: 200),
+                      child: Text(
+                        widget.movie.title,
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ),
                 ),
@@ -178,19 +176,29 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     ),
                   ),
                 ),
-
-                // Bottom Action Bar
-                _buildBottomBar(
-                  authService: authService,
-                  userDataProvider: userDataProvider,
-                  user: user,
-                  isFavorite: isFavorite,
-                  isWatched: isWatched,
-                ),
               ],
             );
           },
         ),
+      ),
+      bottomNavigationBar: Consumer2<AuthService, UserDataProvider>(
+        builder: (context, authService, userDataProvider, _) {
+          final user = authService.currentUser;
+          final isFavorite =
+              userDataProvider.favoriteIds.contains(widget.movie.uniqueId) ||
+              userDataProvider.favoriteIds.contains(widget.movie.id);
+          final isWatched =
+              userDataProvider.watchedIds.contains(widget.movie.uniqueId) ||
+              userDataProvider.watchedIds.contains(widget.movie.id);
+
+          return _buildBottomBar(
+            authService: authService,
+            userDataProvider: userDataProvider,
+            user: user,
+            isFavorite: isFavorite,
+            isWatched: isWatched,
+          );
+        },
       ),
     );
   }
@@ -214,9 +222,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 bottomLeft: Radius.circular(24),
                 bottomRight: Radius.circular(24),
               ),
-              child: Container(
+              child: SizedBox(
                 width: double.infinity,
-                constraints: const BoxConstraints(maxHeight: 320),
+                height: 250,
                 child: imagePath != null
                     ? _buildImage(imagePath)
                     : GestureDetector(
@@ -483,50 +491,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             ),
           ],
         ),
-        // Upload progress indicator
-        if (userData.isUploadingVideo)
-          Padding(
-            padding: const EdgeInsets.only(top: 8, bottom: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                LinearProgressIndicator(
-                  value: userData.videoUploadProgress,
-                  backgroundColor: Colors.white12,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Uploading... ${(userData.videoUploadProgress * 100).toInt()}%',
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
         const SizedBox(height: 8),
-        StreamBuilder<QuerySnapshot>(
-          stream: userData.firestoreService.getVideoCollection(
-            uid,
-            widget.movie.uniqueId,
-          ),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
+        Selector<UserDataProvider, List<VideoEdit>>(
+          selector: (context, provider) =>
+              provider.getMovieVideos(widget.movie.uniqueId),
+          builder: (context, videos, child) {
+            if (!userData.isMovieVideosLoaded(widget.movie.uniqueId)) {
               return const SizedBox(
                 height: 100,
                 child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
               );
             }
 
-            if (snapshot.hasError) {
-              return const Text(
-                'Could not load videos.',
-                style: TextStyle(color: Colors.white38),
-              );
-            }
-
-            final docs = snapshot.data?.docs ?? [];
-
-            if (docs.isEmpty) {
+            if (videos.isEmpty) {
               return Container(
                 height: 100,
                 width: double.infinity,
@@ -543,15 +520,6 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 ),
               );
             }
-
-            final videos = docs
-                .map(
-                  (doc) => VideoEdit.fromFirestore(
-                    doc.data() as Map<String, dynamic>,
-                    doc.id,
-                  ),
-                )
-                .toList();
 
             return ListView.separated(
               shrinkWrap: true,
@@ -588,44 +556,53 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      trailing: IconButton(
-                        icon: const Icon(
-                          Icons.delete_outline,
-                          color: Colors.redAccent,
-                        ),
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              title: const Text('Delete Video'),
-                              content: Text(
-                                'Remove "${video.title}" from your collection?',
+                      trailing: userData.deletingVideoIds.contains(video.id)
+                          ? const SizedBox(
+                              width: 32,
+                              height: 32,
+                              child: Padding(
+                                padding: EdgeInsets.all(8.0),
+                                child: CircularProgressIndicator(strokeWidth: 2),
                               ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx),
-                                  child: const Text('Cancel'),
-                                ),
-                                FilledButton(
-                                  onPressed: () {
-                                    Navigator.pop(ctx);
-                                    userData.deleteVideo(
-                                      uid,
-                                      widget.movie,
-                                      video.id,
-                                      video.videoUrl,
-                                    );
-                                  },
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: Colors.red,
+                            )
+                          : IconButton(
+                              icon: const Icon(
+                                Icons.delete_outline,
+                                color: Colors.redAccent,
+                              ),
+                              onPressed: () {
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Delete Video'),
+                                    content: Text(
+                                      'Remove "${video.title}" from your collection?',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(ctx),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      FilledButton(
+                                        onPressed: () {
+                                          Navigator.pop(ctx);
+                                          userData.deleteVideo(
+                                            uid,
+                                            widget.movie,
+                                            video.id,
+                                            video.videoUrl,
+                                          );
+                                        },
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: Colors.red,
+                                        ),
+                                        child: const Text('Delete'),
+                                      ),
+                                    ],
                                   ),
-                                  child: const Text('Delete'),
-                                ),
-                              ],
+                                );
+                              },
                             ),
-                          );
-                        },
-                      ),
                       onTap: () {
                         Navigator.push(
                           context,

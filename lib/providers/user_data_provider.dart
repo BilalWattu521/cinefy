@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../models/custom_list.dart';
 import '../models/movie.dart';
+import '../models/video_edit.dart';
 import '../services/firestore_service.dart';
 import '../services/storage_service.dart';
 
@@ -16,8 +17,12 @@ class UserDataProvider extends ChangeNotifier {
   Map<String, String> _customPosters = {};
   String? _currentUid;
 
+  // Video cache per movie
+  final Map<String, List<VideoEdit>> _movieVideosCache = {};
+  final Map<String, StreamSubscription> _videoStreamSubs = {};
+  final Set<String> _deletingVideoIds = {};
+
   // Video upload progress tracking
-  double _videoUploadProgress = 0;
   bool _isUploadingVideo = false;
   final StreamController<double> _uploadProgressController = 
       StreamController<double>.broadcast();
@@ -30,9 +35,13 @@ class UserDataProvider extends ChangeNotifier {
   List<String> get favoriteIds => _favoriteIds;
   List<CustomList> get customLists => _customLists;
   Map<String, String> get customPosters => _customPosters;
-  double get videoUploadProgress => _videoUploadProgress;
   bool get isUploadingVideo => _isUploadingVideo;
+  Set<String> get deletingVideoIds => _deletingVideoIds;
   Stream<double> get uploadProgressStream => _uploadProgressController.stream;
+
+  // Getters for cached videos
+  List<VideoEdit> getMovieVideos(String movieId) => _movieVideosCache[movieId] ?? [];
+  bool isMovieVideosLoaded(String movieId) => _movieVideosCache.containsKey(movieId);
 
   FirestoreService get firestoreService => _firestoreService;
 
@@ -103,6 +112,15 @@ class UserDataProvider extends ChangeNotifier {
     _userDataSub?.cancel();
     _customListsSub?.cancel();
     _customPostersSub?.cancel();
+    
+    // Cancel all video subscriptions
+    for (var sub in _videoStreamSubs.values) {
+      sub.cancel();
+    }
+    _videoStreamSubs.clear();
+    _movieVideosCache.clear();
+    _deletingVideoIds.clear();
+    
     notifyListeners();
   }
 
@@ -111,6 +129,9 @@ class UserDataProvider extends ChangeNotifier {
     _userDataSub?.cancel();
     _customListsSub?.cancel();
     _customPostersSub?.cancel();
+    for (var sub in _videoStreamSubs.values) {
+      sub.cancel();
+    }
     _uploadProgressController.close();
     super.dispose();
   }
@@ -290,12 +311,29 @@ class UserDataProvider extends ChangeNotifier {
       if (kDebugMode) print('Error removing custom poster: $e');
       if (previous != null) {
         _customPosters[key] = previous;
-        notifyListeners();
       }
     }
   }
 
   // Video Collection Methods
+  void watchMovieVideos(String uid, String movieUniqueId) {
+    if (_videoStreamSubs.containsKey(movieUniqueId)) return;
+
+    _videoStreamSubs[movieUniqueId] = _firestoreService
+        .getVideoCollection(uid, movieUniqueId)
+        .listen((snapshot) {
+      _movieVideosCache[movieUniqueId] = snapshot.docs
+          .map(
+            (doc) => VideoEdit.fromFirestore(
+              doc.data() as Map<String, dynamic>,
+              doc.id,
+            ),
+          )
+          .toList();
+      notifyListeners();
+    });
+  }
+
   Future<bool> uploadVideo(
     String uid,
     Movie movie,
@@ -303,18 +341,14 @@ class UserDataProvider extends ChangeNotifier {
     String title,
   ) async {
     _isUploadingVideo = true;
-    _videoUploadProgress = 0;
     notifyListeners();
-
     try {
       final downloadUrl = await _storageService.uploadVideo(
         uid: uid,
         movieUniqueId: movie.uniqueId,
         videoFile: videoFile,
         onProgress: (progress) {
-          _videoUploadProgress = progress;
           _uploadProgressController.add(progress);
-          notifyListeners();
         },
       );
 
@@ -326,13 +360,11 @@ class UserDataProvider extends ChangeNotifier {
       );
 
       _isUploadingVideo = false;
-      _videoUploadProgress = 0;
       notifyListeners();
       return true;
     } catch (e) {
       if (kDebugMode) print('Error uploading video: $e');
       _isUploadingVideo = false;
-      _videoUploadProgress = 0;
       notifyListeners();
       return false;
     }
@@ -344,6 +376,8 @@ class UserDataProvider extends ChangeNotifier {
     String videoId,
     String videoUrl,
   ) async {
+    _deletingVideoIds.add(videoId);
+    notifyListeners();
     try {
       await _storageService.deleteVideo(videoUrl);
       await _firestoreService.deleteVideoMetadata(
@@ -351,10 +385,23 @@ class UserDataProvider extends ChangeNotifier {
         movie.uniqueId,
         videoId,
       );
+
+      // Folder cleanup logic: if this was the last video, remove the folder
+      final remainingVideos = _movieVideosCache[movie.uniqueId] ?? [];
+      if (remainingVideos.length <= 1) {
+        // We check <= 1 because the stream update might not have reflected the deletion yet
+        // or this is the last one being removed.
+        final folderPath = 'movie_tracker/users/$uid/videos/${movie.uniqueId}';
+        await _storageService.deleteFolder(folderPath);
+      }
+
       return true;
     } catch (e) {
       if (kDebugMode) print('Error deleting video: $e');
       return false;
+    } finally {
+      _deletingVideoIds.remove(videoId);
+      notifyListeners();
     }
   }
 }

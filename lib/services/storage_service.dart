@@ -133,4 +133,35 @@ class StorageService {
           'Delete failed: ${jsonResponse['error']?['message'] ?? 'Unknown error'}');
     }
   }
+
+  /// Deletes an empty folder from Cloudinary.
+  /// Note: Folders can only be deleted if they are truly empty.
+  Future<void> deleteFolder(String folderPath) async {
+    if (!isConfigured) {
+      throw Exception('Cloudinary is not configured in .env');
+    }
+
+    // Cloudinary Admin API for folder deletion
+    final url = Uri.parse(
+        'https://api.cloudinary.com/v1_1/$_cloudName/folders/$folderPath');
+
+    // Admin API uses Basic Authentication: base64(api_key:api_secret)
+    final String auth = 'Basic ${base64Encode(utf8.encode('$_apiKey:$_apiSecret'))}';
+
+    final response = await http.delete(
+      url,
+      headers: {
+        'Authorization': auth,
+      },
+    );
+
+    if (response.statusCode != 200 && response.statusCode != 404) {
+      final jsonResponse = jsonDecode(response.body);
+      if (kDebugMode) {
+        print('Cloudinary folder delete failed: ${jsonResponse['error']?['message'] ?? 'Unknown error'}');
+      }
+    } else if (response.statusCode == 200) {
+      if (kDebugMode) print('Cloudinary folder deleted successfully: $folderPath');
+    }
+  }
 }
