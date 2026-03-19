@@ -6,6 +6,7 @@ import '../services/auth_service.dart';
 import '../models/movie.dart';
 import 'movie_detail_screen.dart';
 import '../widgets/movie_card.dart';
+import '../utils/dialog_utils.dart';
 
 class CustomListDetailScreen extends StatelessWidget {
   final String listId;
@@ -134,12 +135,19 @@ class CustomListDetailScreen extends StatelessWidget {
                                 top: 8,
                                 right: 8,
                                 child: GestureDetector(
-                                  onTap: () {
-                                    userData.toggleMovieInCustomList(
-                                      user.uid,
-                                      listId,
-                                      movie,
+                                  onTap: () async {
+                                    final confirm = await DialogUtils.showConfirmationDialog(
+                                      context,
+                                      title: 'Remove from List?',
+                                      content: 'Are you sure you want to remove "${movie.title}" from this list?',
                                     );
+                                    if (confirm) {
+                                      userData.toggleMovieInCustomList(
+                                        user.uid,
+                                        listId,
+                                        movie,
+                                      );
+                                    }
                                   },
                                   child: Container(
                                     padding: const EdgeInsets.all(4),
@@ -197,33 +205,19 @@ class CustomListDetailScreen extends StatelessWidget {
     String uid,
     String listId,
     String listName,
-  ) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Delete List'),
-          content: Text('Are you sure you want to delete this list?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () {
-                userData.deleteCustomList(uid, listId);
-                Navigator.pop(context); // Close dialog
-                Navigator.pop(context); // Go back to Lists screen
-              },
-              child: const Text('Delete'),
-            ),
-          ],
-        );
-      },
+  ) async {
+    final confirm = await DialogUtils.showConfirmationDialog(
+      context,
+      title: 'Delete List',
+      content: 'Are you sure you want to delete the list "$listName"?',
+      confirmText: 'Delete',
     );
+
+    if (confirm) {
+      userData.deleteCustomList(uid, listId);
+      if (context.mounted) {
+        Navigator.pop(context); // Go back to Lists screen
+      }
+    }
   }
 }

@@ -91,31 +91,40 @@ class StorageService {
     }
 
     // Extract the public_id from the videoUrl
-    // Typical URL: https://res.cloudinary.com/{cloud_name}/video/upload/v{version}/{public_id}.mp4
     final uri = Uri.parse(videoUrl);
     final segments = uri.pathSegments;
-    
-    // Find the 'upload' segment, skip the version segment, then get everything after it
-    int uploadIndex = segments.indexOf('upload');
-    if (uploadIndex == -1 || uploadIndex + 2 >= segments.length) {
+    final uploadIndex = segments.indexOf('upload');
+
+    // Handle variation in URL structure
+    if (uploadIndex == -1 || uploadIndex + 1 >= segments.length) {
       if (kDebugMode) print('Could not extract public_id from URL: $videoUrl');
-      return; 
+      return;
     }
 
-    // Combine remaining segments to form public_id and remove the file extension
-    String publicIdWithExtension = segments.sublist(uploadIndex + 2).join('/');
-    String publicId = publicIdWithExtension.substring(
-        0, publicIdWithExtension.lastIndexOf('.'));
+    // Check if the next segment is a version string (starts with 'v' and followed by digits)
+    int startIdx = uploadIndex + 1;
+    if (segments[startIdx].startsWith('v') &&
+        segments[startIdx].substring(1).contains(RegExp(r'^\d+$'))) {
+      startIdx++;
+    }
 
-    final url = Uri.parse(
-        'https://api.cloudinary.com/v1_1/$_cloudName/video/destroy');
+    if (startIdx >= segments.length) {
+      if (kDebugMode) print('Could not extract public_id (invalid segments) from URL: $videoUrl');
+      return;
+    }
 
+    String publicIdWithExtension = segments.sublist(startIdx).join('/');
+    String publicId = publicIdWithExtension;
+    if (publicIdWithExtension.contains('.')) {
+      publicId = publicIdWithExtension.substring(0, publicIdWithExtension.lastIndexOf('.'));
+    }
+
+    final url = Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/video/destroy');
     final timestamp = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-    // params to sign: public_id, timestamp
+    // Params to sign (must be alphabetical): public_id, timestamp
     final String paramsToSign = 'public_id=$publicId&timestamp=$timestamp$_apiSecret';
-    final String signature =
-        sha1.convert(utf8.encode(paramsToSign)).toString();
+    final String signature = sha1.convert(utf8.encode(paramsToSign)).toString();
 
     final response = await http.post(
       url,
@@ -129,39 +138,80 @@ class StorageService {
 
     if (response.statusCode != 200) {
       final jsonResponse = jsonDecode(response.body);
-      throw Exception(
-          'Delete failed: ${jsonResponse['error']?['message'] ?? 'Unknown error'}');
+      throw Exception('Delete failed: ${jsonResponse['error']?['message'] ?? 'Unknown error'}');
+    }
+
+    // Auto-cleanup: Try to delete the movie folder if it's now empty
+    if (publicId.contains('/')) {
+      final folderPath = publicId.substring(0, publicId.lastIndexOf('/'));
+      // Only attempt if it's under the movie_tracker/users branch
+      if (folderPath.startsWith('movie_tracker/users/')) {
+        await deleteFolder(folderPath); // Non-recursive delete (only if empty)
+      }
     }
   }
 
   /// Deletes an empty folder from Cloudinary.
   /// Note: Folders can only be deleted if they are truly empty.
   Future<void> deleteFolder(String folderPath) async {
-    if (!isConfigured) {
-      throw Exception('Cloudinary is not configured in .env');
-    }
+    if (!isConfigured) return;
 
-    // Cloudinary Admin API for folder deletion
-    final url = Uri.parse(
-        'https://api.cloudinary.com/v1_1/$_cloudName/folders/$folderPath');
-
-    // Admin API uses Basic Authentication: base64(api_key:api_secret)
+    final url = Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/folders/$folderPath');
     final String auth = 'Basic ${base64Encode(utf8.encode('$_apiKey:$_apiSecret'))}';
 
-    final response = await http.delete(
-      url,
-      headers: {
-        'Authorization': auth,
-      },
-    );
+    final response = await http.delete(url, headers: {'Authorization': auth});
 
-    if (response.statusCode != 200 && response.statusCode != 404) {
-      final jsonResponse = jsonDecode(response.body);
-      if (kDebugMode) {
-        print('Cloudinary folder delete failed: ${jsonResponse['error']?['message'] ?? 'Unknown error'}');
-      }
-    } else if (response.statusCode == 200) {
+    if (response.statusCode == 200) {
       if (kDebugMode) print('Cloudinary folder deleted successfully: $folderPath');
+    }
+    // We ignore failures (like 404 or 409 Conflict if not empty) for normal cleanup
+  }
+
+  /// Force-deletes a folder and all its contents (resources and subfolders).
+  Future<void> deleteFolderRecursive(String folderPath) async {
+    if (!isConfigured) return;
+
+    try {
+      // 1. Delete all resources in this folder (and subfolders)
+      // We must specify the resource_type. For our app, 'video' is most common.
+      await _deleteResourcesByPrefix(folderPath, 'video');
+      await _deleteResourcesByPrefix(folderPath, 'image');
+      await _deleteResourcesByPrefix(folderPath, 'raw');
+
+      // 2. Recursively delete sub-folders
+      await _deleteSubFolders(folderPath);
+
+      // 3. Delete the folder itself
+      await deleteFolder(folderPath);
+    } catch (e) {
+      if (kDebugMode) print('Error in deleteFolderRecursive for $folderPath: $e');
+    }
+  }
+
+  /// Admin API helper to delete resources by prefix
+  Future<void> _deleteResourcesByPrefix(String prefix, String resourceType) async {
+    final url = Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/resources/$resourceType/upload?prefix=$prefix');
+    final String auth = 'Basic ${base64Encode(utf8.encode('$_apiKey:$_apiSecret'))}';
+
+    await http.delete(url, headers: {'Authorization': auth});
+  }
+
+  /// Admin API helper to list and delete subfolders
+  Future<void> _deleteSubFolders(String folderPath) async {
+    final url = Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/folders/$folderPath');
+    final String auth = 'Basic ${base64Encode(utf8.encode('$_apiKey:$_apiSecret'))}';
+
+    final response = await http.get(url, headers: {'Authorization': auth});
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final folders = data['folders'] as List<dynamic>?;
+      if (folders != null) {
+        for (var f in folders) {
+          final subPath = f['path'] as String;
+          // Recursively delete subfolder
+          await deleteFolderRecursive(subPath);
+        }
+      }
     }
   }
 }

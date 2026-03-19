@@ -6,6 +6,7 @@ import '../services/auth_service.dart';
 import '../models/movie.dart';
 import 'movie_detail_screen.dart';
 import '../widgets/movie_card.dart';
+import '../utils/dialog_utils.dart';
 
 class FavoritesScreen extends StatelessWidget {
   const FavoritesScreen({super.key});
@@ -105,8 +106,15 @@ class FavoritesScreen extends StatelessWidget {
                       top: 8,
                       right: 8,
                       child: GestureDetector(
-                        onTap: () {
-                          userData.toggleFavorite(user.uid, movie);
+                        onTap: () async {
+                          final confirm = await DialogUtils.showConfirmationDialog(
+                            context,
+                            title: 'Remove Favorite?',
+                            content: 'Are you sure you want to remove "${movie.title}" from your favorites?',
+                          );
+                          if (confirm) {
+                            userData.toggleFavorite(user.uid, movie);
+                          }
                         },
                         child: Container(
                           padding: const EdgeInsets.all(4),

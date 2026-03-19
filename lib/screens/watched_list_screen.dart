@@ -6,6 +6,7 @@ import '../services/auth_service.dart';
 import '../models/movie.dart';
 import 'movie_detail_screen.dart';
 import '../widgets/movie_card.dart';
+import '../utils/dialog_utils.dart';
 
 class WatchedListScreen extends StatelessWidget {
   const WatchedListScreen({super.key});
@@ -107,8 +108,15 @@ class WatchedListScreen extends StatelessWidget {
                       top: 8,
                       right: 8,
                       child: GestureDetector(
-                        onTap: () {
-                          userData.toggleWatched(user.uid, movie);
+                        onTap: () async {
+                          final confirm = await DialogUtils.showConfirmationDialog(
+                            context,
+                            title: 'Remove from Watched?',
+                            content: 'Are you sure you want to remove "${movie.title}" from your watched list?',
+                          );
+                          if (confirm) {
+                            userData.toggleWatched(user.uid, movie);
+                          }
                         },
                         child: Container(
                           padding: const EdgeInsets.all(4),

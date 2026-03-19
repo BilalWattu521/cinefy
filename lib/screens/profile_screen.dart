@@ -57,7 +57,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return Scaffold(
       body: _isDeleting
-          ? const Center(child: CircularProgressIndicator())
+          ? Container(
+              color: colorScheme.surface,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32.0),
+                  child: FadeIn(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircularProgressIndicator(
+                          valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                        ),
+                        const SizedBox(height: 32),
+                        Text(
+                          'Deleting Account...',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: colorScheme.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Please do not close the app.\nWe are securely wiping your data from our servers.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: colorScheme.onSurfaceVariant,
+                            fontSize: 15,
+                            height: 1.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            )
           : CustomScrollView(
               slivers: [
                 SliverAppBar(

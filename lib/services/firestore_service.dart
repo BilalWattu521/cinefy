@@ -155,13 +155,18 @@ class FirestoreService {
     String videoUrl,
     String title,
   ) async {
-    await _db
+    final movieRef = _db
         .collection('users')
         .doc(uid)
         .collection('video_collections')
-        .doc(movieUniqueId)
-        .collection('videos')
-        .add({
+        .doc(movieUniqueId);
+
+    // Ensure the movie parent document exists so it can be discovered during account deletion
+    await movieRef.set({
+      'lastUpdated': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await movieRef.collection('videos').add({
       'videoUrl': videoUrl,
       'title': title,
       'uploadedAt': DateTime.now().millisecondsSinceEpoch,
@@ -197,9 +202,10 @@ class FirestoreService {
         .snapshots();
   }
 
-  Future<void> deleteUserAccountData(String uid) async {
+  Future<List<String>> deleteUserAccountData(String uid) async {
     final userRef = _db.collection('users').doc(uid);
     final batch = _db.batch();
+    final List<String> videoUrls = [];
 
     // 1. Delete all custom lists (subcollection)
     final listsSnapshot = await userRef.collection('custom_lists').get();
@@ -220,6 +226,11 @@ class FirestoreService {
       final videosSnapshot =
           await collDoc.reference.collection('videos').get();
       for (var videoDoc in videosSnapshot.docs) {
+        final data = videoDoc.data();
+        final url = data['videoUrl'] as String?;
+        if (url != null) {
+          videoUrls.add(url);
+        }
         batch.delete(videoDoc.reference);
       }
       batch.delete(collDoc.reference);
@@ -229,5 +240,6 @@ class FirestoreService {
     batch.delete(userRef);
 
     await batch.commit();
+    return videoUrls;
   }
 }

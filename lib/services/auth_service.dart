@@ -3,11 +3,13 @@ import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'firestore_service.dart';
+import 'storage_service.dart';
 
 class AuthService extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
   final FirestoreService _firestore = FirestoreService();
+  final StorageService _storage = StorageService();
   bool _isInitialized = false;
 
   User? get currentUser => _auth.currentUser;
@@ -66,7 +68,7 @@ class AuthService extends ChangeNotifier {
       return null;
     } on FirebaseAuthException catch (e) {
       if (e.code == 'canceled') return 'Sign in aborted by user.';
-      return 'Firebase Auth Error: ${e.message}';
+      return e.message ?? 'An unknown error occurred.';
     } catch (e) {
       final errorStr = e.toString();
       if (errorStr.contains('No credentials available')) {
@@ -88,24 +90,55 @@ class AuthService extends ChangeNotifier {
       final user = _auth.currentUser;
       if (user == null) return 'No user is currently signed in.';
 
-      // 1. Delete data from Firestore
-      await _firestore.deleteUserAccountData(user.uid);
+      // Proactive check for recent login (within last 5 minutes)
+      // This prevents the "partial delete" scenario where Firestore/Cloudinary data is wiped 
+      // but user.delete() fails later due to an old session.
+      final lastSignIn = user.metadata.lastSignInTime;
+      if (lastSignIn != null) {
+        final difference = DateTime.now().difference(lastSignIn);
+        if (difference.inMinutes > 5) {
+          debugPrint('Proactive check: Session too old (${difference.inMinutes} mins).');
+          return 'requires-recent-login';
+        }
+      }
 
-      // 2. Delete from Firebase Auth
+      // 1. Delete data from Firestore and get associated video URLs
+      final videoUrls = await _firestore.deleteUserAccountData(user.uid);
+
+      // 2. Delete videos from Cloudinary
+      for (final url in videoUrls) {
+        try {
+          await _storage.deleteVideo(url);
+        } catch (e) {
+          debugPrint('Error deleting video from Cloudinary: $e');
+          // We continue anyway to ensure account deletion proceeds
+        }
+      }
+
+      // 3. Delete user's Cloudinary folder (recursive force-delete)
+      try {
+        await _storage.deleteFolderRecursive('movie_tracker/users/${user.uid}');
+      } catch (e) {
+        debugPrint('Error deleting folder from Cloudinary: $e');
+      }
+
+      // 4. Delete from Firebase Auth
       await user.delete();
 
-      // 3. Cleanup local sign-in states
+      // 5. Cleanup local sign-in states
       await _ensureInitialized();
       await _googleSignIn.signOut();
 
       notifyListeners();
       return null;
     } on FirebaseAuthException catch (e) {
+      debugPrint('FirebaseAuthException during account deletion: ${e.code} - ${e.message}');
       if (e.code == 'requires-recent-login') {
-        return 'Please sign out and sign back in to delete your account for security reasons.';
+        return 'requires-recent-login'; // Return code for SnackbarUtils to handle
       }
       return e.message ?? 'An error occurred during account deletion.';
     } catch (e) {
+      debugPrint('Error during account deletion: $e');
       return e.toString();
     }
   }

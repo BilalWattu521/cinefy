@@ -151,8 +151,10 @@ class SnackbarUtils {
     if (errorStr.contains('wrong-password')) {
       return 'Incorrect password. Please try again.';
     }
-    if (errorStr.contains('network-request-failed')) {
-      return 'Network connection issue. Please try again.';
+    if (errorStr.contains('network-request-failed') ||
+        errorStr.contains('network error') ||
+        errorStr.contains('timeout')) {
+      return 'Network connection issue. Please check your internet and try again.';
     }
     if (errorStr.contains('sign in aborted')) {
       return 'Sign in was cancelled.';
@@ -171,7 +173,12 @@ class SnackbarUtils {
 
     // Default Fallback
     if (errorStr.startsWith('exception: ')) {
-      return errorStr.replaceFirst('exception: ', '');
+      return error.toString().replaceFirst('exception: ', '');
+    }
+
+    // If it's a reasonably long string, it's likely a descriptive error already
+    if (error is String && error.length > 10) {
+      return error;
     }
 
     return 'Something went wrong. Please try again later.';
