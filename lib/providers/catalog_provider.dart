@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/movie.dart';
 import '../services/tmdb_service.dart';
+import '../services/firestore_service.dart';
 
 class CatalogProvider extends ChangeNotifier {
   final TmdbService _tmdbService = TmdbService();
+  final FirestoreService _firestoreService = FirestoreService();
 
   final List<Movie> _tmdbMovies = [];
   List<Movie> _searchResults = [];
@@ -33,15 +36,24 @@ class CatalogProvider extends ChangeNotifier {
   bool areAllLoaded(List<String> ids) =>
       ids.every((id) => _movieCache.containsKey(id));
 
-  bool get hasMoreTmdb => _searchQuery.isEmpty ? _hasMoreTmdb : false;
+  bool get hasMoreTmdb => _searchQuery.isEmpty && _currentFilter != 'custom' ? _hasMoreTmdb : false;
   String get currentFilter => _currentFilter;
   String get searchQuery => _searchQuery;
   bool get isSearching => _searchQuery.isNotEmpty;
+
+  final List<Movie> _customMovies = [];
+  StreamSubscription? _customMoviesSub;
+
+  List<Movie> get customMovies => _customMovies;
 
   List<Movie> get mergedCatalog {
     // If searching, return search results instead
     if (_searchQuery.isNotEmpty) {
       return _searchResults;
+    }
+
+    if (_currentFilter == 'custom') {
+      return _customMovies;
     }
 
     return _tmdbMovies;
@@ -52,13 +64,19 @@ class CatalogProvider extends ChangeNotifier {
     // 1. Check persistent cache (most reliable)
     if (_movieCache.containsKey(id)) return _movieCache[id];
 
-    // 2. Check TMDB movies (trending/popular)
+    // 2. Check Custom movies
+    final customIndex = _customMovies.indexWhere(
+      (m) => m.uniqueId == id || m.id == id,
+    );
+    if (customIndex != -1) return _customMovies[customIndex];
+
+    // 3. Check TMDB movies (trending/popular)
     final tmdbIndex = _tmdbMovies.indexWhere(
       (m) => m.uniqueId == id || m.id == id,
     );
     if (tmdbIndex != -1) return _tmdbMovies[tmdbIndex];
 
-    // 3. Check search results
+    // 4. Check search results
     final searchIndex = _searchResults.indexWhere(
       (m) => m.uniqueId == id || m.id == id,
     );
@@ -142,6 +160,33 @@ class CatalogProvider extends ChangeNotifier {
     // Initialize provider - currently only TMDB data is used
   }
 
+  void loadCustomMovies(String uid) {
+    _customMoviesSub?.cancel();
+    _customMoviesSub = _firestoreService.getCustomMovies(uid).listen(
+      (snapshot) {
+        _customMovies.clear();
+        for (var doc in snapshot.docs) {
+          final data = doc.data() as Map<String, dynamic>;
+          final movie = Movie.fromFirestoreJson(data, doc.id);
+          _customMovies.add(movie);
+          // Cache the custom movie by both id and uniqueId
+          _movieCache[movie.id] = movie;
+          _movieCache[movie.uniqueId] = movie;
+        }
+        notifyListeners();
+      },
+      onError: (e) {
+        if (kDebugMode) print('Error listening to custom movies: $e');
+      },
+    );
+  }
+
+  void clearCustomMovies() {
+    _customMoviesSub?.cancel();
+    _customMovies.clear();
+    notifyListeners();
+  }
+
   void setFilter(String filter) {
     if (_currentFilter != filter) {
       _currentFilter = filter;
@@ -149,7 +194,9 @@ class CatalogProvider extends ChangeNotifier {
       _tmdbMovies.clear();
       _hasMoreTmdb = true;
       notifyListeners();
-      loadMoreTmdb();
+      if (filter != 'custom') {
+        loadMoreTmdb();
+      }
     }
   }
 
@@ -165,7 +212,19 @@ class CatalogProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _searchResults = await _tmdbService.searchMulti(_searchQuery);
+      final tmdbResults = await _tmdbService.searchMulti(_searchQuery);
+      
+      // Also search in custom movies
+      final localQuery = _searchQuery.toLowerCase();
+      final matchingCustom = _customMovies.where((movie) {
+        final matchTitle = movie.title.toLowerCase().contains(localQuery);
+        final matchOverview = movie.overview != null && movie.overview!.toLowerCase().contains(localQuery);
+        return matchTitle || matchOverview;
+      }).toList();
+
+      // Prepend custom movies to search results
+      _searchResults = [...matchingCustom, ...tmdbResults];
+
       // Automatically cache results to prevent loss
       for (var movie in _searchResults) {
         _movieCache[movie.uniqueId] = movie;
@@ -187,6 +246,7 @@ class CatalogProvider extends ChangeNotifier {
   }
 
   Future<void> loadMoreTmdb({bool refresh = false}) async {
+    if (_currentFilter == 'custom') return;
     if (_isLoading || (!_hasMoreTmdb && !refresh)) return;
 
     if (refresh) {
@@ -225,5 +285,11 @@ class CatalogProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  @override
+  void dispose() {
+    _customMoviesSub?.cancel();
+    super.dispose();
   }
 }

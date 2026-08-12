@@ -39,6 +39,33 @@ class Movie {
     );
   }
 
+  factory Movie.fromFirestoreJson(Map<String, dynamic> json, String docId) {
+    return Movie(
+      id: docId,
+      title: json['title'] ?? 'Unknown',
+      posterPath: json['posterPath'],
+      backdropPath: json['backdropPath'],
+      overview: json['overview'],
+      releaseDate: json['releaseDate'],
+      voteAverage: (json['voteAverage'] ?? 0.0).toDouble(),
+      source: json['source'] ?? 'custom',
+      type: json['type'] ?? 'movie',
+    );
+  }
+
+  Map<String, dynamic> toFirestoreJson() {
+    return {
+      'title': title,
+      'type': type,
+      'posterPath': posterPath,
+      'backdropPath': backdropPath,
+      'overview': overview,
+      'releaseDate': releaseDate,
+      'voteAverage': voteAverage,
+      'source': source,
+    };
+  }
+
   /// Returns a globally unique ID combining type and TMDB ID (e.g. "tv:12345" or "movie:67890")
   String get uniqueId => '$type:$id';
 

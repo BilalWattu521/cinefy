@@ -11,6 +11,8 @@ import '../services/auth_service.dart';
 import '../services/tmdb_service.dart';
 import '../providers/user_data_provider.dart';
 import '../utils/snackbar_utils.dart';
+import '../utils/dialog_utils.dart';
+import '../services/firestore_service.dart';
 import 'video_player_screen.dart';
 
 class MovieDetailScreen extends StatefulWidget {
@@ -43,6 +45,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _fetchSeasonCount() async {
+    if (widget.movie.source == 'custom') return; // Bypass for custom titles
     final type = widget.movie.type;
     if (type == 'tv' || type == 'series') {
       final count = await _tmdbService.getTvSeasonCount(widget.movie.id);
@@ -68,6 +71,60 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _deleteCustomMovie(String uid, UserDataProvider userData) async {
+    final confirm = await DialogUtils.showConfirmationDialog(
+      context,
+      title: 'Delete Custom Title',
+      content: 'Are you sure you want to permanently delete "${widget.movie.title}" and all its associated data (videos, lists, favorites)?',
+      confirmText: 'Delete',
+      confirmColor: Colors.red,
+    );
+
+    if (confirm && mounted) {
+      try {
+        final movie = widget.movie;
+        final movieId = movie.uniqueId;
+        final legacyId = movie.id;
+
+        // 1. Remove from Favorites if present
+        if (userData.favoriteIds.contains(movieId) || userData.favoriteIds.contains(legacyId)) {
+          await userData.toggleFavorite(uid, movie);
+        }
+
+        // 2. Remove from Watched if present
+        if (userData.watchedIds.contains(movieId) || userData.watchedIds.contains(legacyId)) {
+          await userData.toggleWatched(uid, movie);
+        }
+
+        // 3. Remove from any Custom Lists if present
+        for (var list in userData.customLists) {
+          if (list.movieIds.contains(movieId) || list.movieIds.contains(legacyId)) {
+            await userData.toggleMovieInCustomList(uid, list.id, movie);
+          }
+        }
+
+        // 4. Remove any uploaded videos
+        final videos = userData.getMovieVideos(movieId);
+        for (var video in videos) {
+          await userData.deleteVideo(uid, movie, video.id, video.videoUrl);
+        }
+
+        // 5. Delete from Firestore custom movies
+        final firestoreService = FirestoreService();
+        await firestoreService.deleteCustomMovie(uid, movie.id);
+
+        if (mounted) {
+          SnackbarUtils.showSuccess(context, 'Title deleted successfully!');
+          Navigator.pop(context);
+        }
+      } catch (e) {
+        if (mounted) {
+          SnackbarUtils.showError(context, 'Failed to delete title: $e');
+        }
+      }
+    }
   }
 
   void _guardedAction(AuthService auth, VoidCallback action) {
@@ -278,8 +335,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 ),
               ),
             ),
-            // Show remove button if custom poster is uploaded
-            if (customPoster != null && !hasTmdbImage)
+            // Show remove button if custom poster is uploaded (only for TMDB movies)
+            if (customPoster != null && !hasTmdbImage && widget.movie.source != 'custom')
               Positioned(
                 top: 8,
                 right: 12,
@@ -301,6 +358,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         );
                       }
                     },
+                  ),
+                ),
+              ),
+            // Show delete button if it's a custom movie/series
+            if (widget.movie.source == 'custom')
+              Positioned(
+                top: 8,
+                right: 12,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.delete_forever,
+                      color: Colors.redAccent,
+                    ),
+                    onPressed: () {
+                      if (auth.currentUser != null) {
+                        _deleteCustomMovie(
+                          auth.currentUser!.uid,
+                          userData,
+                        );
+                      } else {
+                        _promptLogin();
+                      }
+                    },
+                    tooltip: 'Delete Title',
                   ),
                 ),
               ),

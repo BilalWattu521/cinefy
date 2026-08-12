@@ -76,6 +76,10 @@ class AuthWrapper extends StatelessWidget {
               context,
               listen: false,
             ).loadUserData(auth.currentUser!.uid);
+            Provider.of<CatalogProvider>(
+              context,
+              listen: false,
+            ).loadCustomMovies(auth.currentUser!.uid);
           });
         } else {
           // Clear any stale user data for guests
@@ -84,6 +88,10 @@ class AuthWrapper extends StatelessWidget {
               context,
               listen: false,
             ).clearUserData();
+            Provider.of<CatalogProvider>(
+              context,
+              listen: false,
+            ).clearCustomMovies();
           });
         }
         // Always show the container, regardless of auth state

@@ -202,6 +202,50 @@ class FirestoreService {
         .snapshots();
   }
 
+  // Custom Movies (Private additions per user)
+  Future<void> addCustomMovie(
+    String uid, {
+    required String title,
+    required String type,
+    String? releaseDate,
+    String? overview,
+    String? base64Poster,
+  }) async {
+    final movieRef = _db
+        .collection('users')
+        .doc(uid)
+        .collection('custom_movies')
+        .doc();
+
+    await movieRef.set({
+      'title': title,
+      'type': type,
+      'releaseDate': releaseDate,
+      'overview': overview,
+      'posterPath': base64Poster,
+      'source': 'custom',
+      'created_at': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> deleteCustomMovie(String uid, String movieId) async {
+    await _db
+        .collection('users')
+        .doc(uid)
+        .collection('custom_movies')
+        .doc(movieId)
+        .delete();
+  }
+
+  Stream<QuerySnapshot> getCustomMovies(String uid) {
+    return _db
+        .collection('users')
+        .doc(uid)
+        .collection('custom_movies')
+        .orderBy('created_at', descending: true)
+        .snapshots();
+  }
+
   Future<List<String>> deleteUserAccountData(String uid) async {
     final userRef = _db.collection('users').doc(uid);
     final batch = _db.batch();
@@ -219,7 +263,13 @@ class FirestoreService {
       batch.delete(doc.reference);
     }
 
-    // 3. Delete all video collection metadata
+    // 3. Delete all custom movies (subcollection)
+    final customMoviesSnapshot = await userRef.collection('custom_movies').get();
+    for (var doc in customMoviesSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+
+    // 4. Delete all video collection metadata
     final videoCollsSnapshot =
         await userRef.collection('video_collections').get();
     for (var collDoc in videoCollsSnapshot.docs) {
@@ -236,7 +286,7 @@ class FirestoreService {
       batch.delete(collDoc.reference);
     }
 
-    // 4. Delete the main user document
+    // 5. Delete the main user document
     batch.delete(userRef);
 
     await batch.commit();

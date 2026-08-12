@@ -64,7 +64,10 @@ class SnackbarUtils {
                     Expanded(
                       child: Text(
                         message,
-                        style: const TextStyle(color: Colors.white, fontSize: 14),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                     Text(
@@ -133,14 +136,15 @@ class SnackbarUtils {
 
   static String _mapErrorToFriendlyMessage(dynamic error) {
     if (error == null) return 'An unknown error occurred.';
-    
+
     final errorStr = error.toString().toLowerCase();
 
     // TMDB / General Network Errors
     if (errorStr.contains('failed to load data from tmdb')) {
       return 'Could not reach movie database. Please check your internet connection.';
     }
-    if (errorStr.contains('socketexception') || errorStr.contains('httpexception')) {
+    if (errorStr.contains('socketexception') ||
+        errorStr.contains('httpexception')) {
       return 'Network error. Please check your connection and try again.';
     }
 
